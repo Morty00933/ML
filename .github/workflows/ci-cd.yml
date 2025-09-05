@@ -1,4 +1,5 @@
 name: ci-cd
+
 on:
   push:
     branches: [ main ]
@@ -11,11 +12,19 @@ jobs:
     permissions:
       contents: read
       packages: write
+
     env:
       REGISTRY: ghcr.io
-      OWNER_LC: ${{ github.repository_owner | lower }}
+
     steps:
       - uses: actions/checkout@v4
+
+      # Готовим owner в нижнем регистре как output шага (можно использовать в выражениях)
+      - name: Prepare lowercase owner
+        id: prep
+        run: echo "owner_lc=${OWNER,,}" >> "$GITHUB_OUTPUT"
+        env:
+          OWNER: ${{ github.repository_owner }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -35,7 +44,7 @@ jobs:
         id: meta_api
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/mini-ml-api
+          images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/mini-ml-api
           tags: |
             type=raw,value=latest
             type=ref,event=branch
@@ -53,7 +62,7 @@ jobs:
         id: meta_inf
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/mini-ml-inference
+          images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/mini-ml-inference
           tags: |
             type=raw,value=latest
             type=ref,event=branch
