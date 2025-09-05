@@ -2,14 +2,24 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mini-ml-inference
+  labels:
+    app: mini-ml-inference
 spec:
-  replicas: { { .Values.inference.replicas } }
-  selector: { matchLabels: { app: mini-ml-inference } }
+  replicas: {{ .Values.inference.replicas | default 1 }}
+  selector:
+    matchLabels:
+      app: mini-ml-inference
   template:
-    metadata: { labels: { app: mini-ml-inference } }
+    metadata:
+      labels:
+        app: mini-ml-inference
     spec:
       containers:
         - name: inference
-          image: { { .Values.image.registry } }-inference:{{ .Values.image.inference_tag }}
-          ports: [ { containerPort: 8080 } ]
-          resources: { { toYaml .Values.inference.resources | nindent 12 } }
+          image: "{{ .Values.image.registry }}-inference:{{ .Values.image.inference_tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
+          ports:
+            - name: http
+              containerPort: 8080
+          resources:
+            {{- toYaml (.Values.inference.resources | default dict) | nindent 12 }}
