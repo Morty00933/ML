@@ -6,21 +6,19 @@ on:
   pull_request:
     branches: [ main ]
 
+env:
+  REGISTRY: ghcr.io
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-
-    env:
-      REGISTRY: ghcr.io
-
     steps:
       - uses: actions/checkout@v4
 
-      # Приводим owner к нижнему регистру
-      - name: Prepare lowercase owner
+      - name: Lowercase owner
         id: prep
         run: echo "owner_lc=${OWNER,,}" >> "$GITHUB_OUTPUT"
         env:
@@ -32,25 +30,35 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to GHCR
+      - name: Docker login (GHCR)
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ----- API image -----
-      - name: Docker meta (API)
+      # ---- Lint Dockerfiles (simple hadolint via container)
+      - name: Lint Dockerfiles
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          recursive: true
+          dockerfile: |
+            services/api/Dockerfile
+            services/training/Dockerfile
+            services/inference/Dockerfile
+
+      # ---- Build & push: API
+      - name: Docker meta (api)
         id: meta_api
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/mini-ml-api
           tags: |
-            type=raw,value=latest
             type=ref,event=branch
             type=sha
+            type=raw,value=latest
 
-      - name: Build & push API
+      - name: Build & push (api)
         uses: docker/build-push-action@v6
         with:
           context: ./services/api
@@ -58,18 +66,37 @@ jobs:
           tags: ${{ steps.meta_api.outputs.tags }}
           labels: ${{ steps.meta_api.outputs.labels }}
 
-      # ----- Inference image -----
-      - name: Docker meta (Inference)
+      # ---- Build & push: training
+      - name: Docker meta (training)
+        id: meta_train
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/mini-ml-training
+          tags: |
+            type=ref,event=branch
+            type=sha
+            type=raw,value=latest
+
+      - name: Build & push (training)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./services/training
+          push: true
+          tags: ${{ steps.meta_train.outputs.tags }}
+          labels: ${{ steps.meta_train.outputs.labels }}
+
+      # ---- Build & push: inference
+      - name: Docker meta (inference)
         id: meta_inf
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/mini-ml-inference
           tags: |
-            type=raw,value=latest
             type=ref,event=branch
             type=sha
+            type=raw,value=latest
 
-      - name: Build & push Inference
+      - name: Build & push (inference)
         uses: docker/build-push-action@v6
         with:
           context: ./services/inference
@@ -78,54 +105,62 @@ jobs:
           labels: ${{ steps.meta_inf.outputs.labels }}
 
   deploy:
-    # деплой возможен только после успешной сборки
     needs: build-and-push
     runs-on: ubuntu-latest
-
-    # Прокидываем секреты в env и проверяем ИХ, а не secrets.*
+    # На уровне job оставляем только ветку (env/secrets тут использовать нельзя)
+    if: ${{ github.ref == 'refs/heads/main' }}
+    permissions:
+      contents: read
     env:
+      REGISTRY: ghcr.io
+      OWNER_LC: ${{ github.repository_owner }}
       KUBE_CONFIG_BASE64: ${{ secrets.KUBE_CONFIG_BASE64 }}
       K8S_NAMESPACE: ${{ secrets.K8S_NAMESPACE }}
       HELM_RELEASE: ${{ secrets.HELM_RELEASE }}
-      OWNER_LC: ${{ github.repository_owner }}
-      REGISTRY: ghcr.io
-
-    # Условие деплоя: ветка main И передан kubeconfig
-    if: ${{ github.ref == 'refs/heads/main' && env.KUBE_CONFIG_BASE64 != '' }}
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Lowercase owner
-        id: prep
-        run: echo "owner_lc=${OWNER,,}" >> "$GITHUB_OUTPUT"
-        env:
-          OWNER: ${{ env.OWNER_LC }}
+      - name: Helm lint
+        uses: azure/setup-helm@v4
+      - name: Lint chart
+        run: helm lint ./infra/helm/mini-ml
+
+      # ---- Gate: проверяем, что секрет есть (делаем это в шаге, не в job.if)
+      - name: Gate deploy (check KUBE_CONFIG_BASE64)
+        id: gate
+        run: |
+          if [ -z "${KUBE_CONFIG_BASE64:-}" ]; then
+            echo "missing=1" >> "$GITHUB_OUTPUT"
+            echo "KUBE_CONFIG_BASE64 is empty. Skipping deploy."
+          else
+            echo "missing=0" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Prepare kubeconfig
+        if: ${{ steps.gate.outputs.missing == '0' }}
         run: |
-          echo "$KUBE_CONFIG_BASE64" | base64 -d > $HOME/kubeconfig
-          echo "KUBECONFIG=$HOME/kubeconfig" >> $GITHUB_ENV
+          echo "$KUBE_CONFIG_BASE64" | base64 -d > "$HOME/kubeconfig"
+          echo "KUBECONFIG=$HOME/kubeconfig" >> "$GITHUB_ENV"
 
-      - name: Show cluster info (optional)
+      - name: Show cluster info
+        if: ${{ steps.gate.outputs.missing == '0' }}
         run: |
           kubectl --kubeconfig "$KUBECONFIG" cluster-info
           kubectl --kubeconfig "$KUBECONFIG" get ns
 
-      - name: Create namespace if not exists
+      - name: Ensure namespace
+        if: ${{ steps.gate.outputs.missing == '0' }}
         run: |
           kubectl --kubeconfig "$KUBECONFIG" get ns "$K8S_NAMESPACE" || \
           kubectl --kubeconfig "$KUBECONFIG" create ns "$K8S_NAMESPACE"
 
-      # Если образы приватные — нужен imagePullSecret (разово в кластере).
-      # Секрет здесь не создаем, считаем что уже есть (например, 'ghcr-secret').
-      # Иначе этот шаг можно добавить.
-
       - name: Helm upgrade/install
+        if: ${{ steps.gate.outputs.missing == '0' }}
         run: |
-          OWNER_LC="${{ steps.prep.outputs.owner_lc }}"
+          OWNER_LC="${{ env.OWNER_LC,, }}"
           helm upgrade --install "${HELM_RELEASE}" ./infra/helm/mini-ml \
             --namespace "$K8S_NAMESPACE" \
             --set image.registry="${REGISTRY}/${OWNER_LC}" \
             --set image.api_tag=latest \
+            --set image.training_tag=latest \
             --set image.inference_tag=latest
