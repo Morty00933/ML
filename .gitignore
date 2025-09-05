@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+*.pyo
+*.pyd
+*.pkl
+*.log
+
+# Virtual env
+.venv/
+env/
+venv/
+*.env
+
+# IDE/Editor
+.vscode/
+.idea/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker
+*.pid
+*.log
+docker-compose.override.yml
+
+# Data / artifacts
+data/
+mlruns/
+artifacts/
+minio/
+pgdata/
+grafana/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Tests / coverage
+.coverage
+htmlcov/
+.tox/
+pytest_cache/
+
+# Prefect flows cache
+.prefect/
+
+# Local configs
+configs/local.yaml
+*.secret.yaml

@@ -1,0 +1,20 @@
+{ { - if .Values.inference.hpa.enabled } }
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mini-ml-inference
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mini-ml-inference
+  minReplicas: { { .Values.inference.hpa.minReplicas } }
+  maxReplicas: { { .Values.inference.hpa.maxReplicas } }
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: { { .Values.inference.hpa.targetCPUUtilizationPercentage } }
+  { { - end } }

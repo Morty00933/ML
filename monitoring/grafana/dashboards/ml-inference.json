@@ -1,0 +1,30 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "type": "graph",
+      "title": "Latency (p95 approx)",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(inference_latency_seconds_bucket[1m])) by (le))"
+        }
+      ]
+    },
+    {
+      "type": "graph",
+      "title": "Requests / Errors",
+      "targets": [
+        {
+          "expr": "rate(inference_requests_total[1m])"
+        },
+        {
+          "expr": "rate(inference_errors_total[1m])"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 22,
+  "title": "ML Inference"
+}

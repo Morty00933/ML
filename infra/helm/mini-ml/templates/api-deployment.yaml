@@ -1,0 +1,15 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mini-ml-api
+spec:
+  replicas: { { .Values.api.replicas } }
+  selector: { matchLabels: { app: mini-ml-api } }
+  template:
+    metadata: { labels: { app: mini-ml-api } }
+    spec:
+      containers:
+        - name: api
+          image: { { .Values.image.registry } }-api:{{ .Values.image.api_tag }}
+          ports: [ { containerPort: 8000 } ]
+          resources: { { toYaml .Values.api.resources | nindent 12 } }

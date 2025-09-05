@@ -1,0 +1,146 @@
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: mlflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio:/data
+    restart: unless-stopped
+
+  create-bucket:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD} &&
+      /usr/bin/mc mb -p local/${MINIO_BUCKET} || true
+      "
+    restart: "no"
+
+  mlflow:
+    build: ./services/mlflow
+    depends_on:
+      - postgres
+      - minio
+      - create-bucket
+    environment:
+      MLFLOW_S3_ENDPOINT_URL: ${MLFLOW_S3_ENDPOINT_URL}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+    command: >
+      --backend-store-uri ${MLFLOW_BACKEND_STORE_URI}
+      --default-artifact-root s3://${MINIO_BUCKET}/
+      --host 0.0.0.0 --port 5000
+    ports:
+      - "5001:5000"
+    restart: unless-stopped
+
+  prefect:
+    image: prefecthq/prefect:2.19.6-python3.11
+    environment:
+      PREFECT_API_URL: ${PREFECT_API_URL}
+    ports:
+      - "4200:4200"
+    command: >
+      bash -lc "prefect server start --host 0.0.0.0"
+    restart: unless-stopped
+
+  prefect-agent:
+    image: prefecthq/prefect:2.19.6-python3.11
+    depends_on:
+      - prefect
+    environment:
+      PREFECT_API_URL: ${PREFECT_API_URL}
+    command: >
+      bash -lc "prefect config set PREFECT_API_URL=${PREFECT_API_URL} && prefect agent start -q 'default'"
+    restart: unless-stopped
+
+  api:
+    build: ./services/api
+    depends_on:
+      - mlflow
+      - prefect
+    environment:
+      - MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}
+      - PREFECT_API_URL=${PREFECT_API_URL}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - MINIO_BUCKET=${MINIO_BUCKET}
+      - ADMIN_API_KEY=${ADMIN_API_KEY}
+      - ENGINEER_API_KEY=${ENGINEER_API_KEY}
+      - VIEWER_API_KEY=${VIEWER_API_KEY}
+    ports:
+      - "${API_PORT}:8000"
+    restart: unless-stopped
+
+  training:
+    build: ./services/training
+    depends_on:
+      - mlflow
+    environment:
+      - MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}
+      - MLFLOW_S3_ENDPOINT_URL=${MLFLOW_S3_ENDPOINT_URL}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT}
+      - MINIO_BUCKET=${MINIO_BUCKET}
+    command: uvicorn flow:app --host 0.0.0.0 --port 8001
+    restart: unless-stopped
+
+  inference:
+    build: ./services/inference
+    depends_on:
+      - mlflow
+    environment:
+      - MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}
+      - MLFLOW_S3_ENDPOINT_URL=${MLFLOW_S3_ENDPOINT_URL}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - MODEL_STAGE=Production
+    ports:
+      - "${INFERENCE_PORT}:8080"
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    volumes:
+      - ./infra/k8s/prometheus.yaml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.0.0
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  minio:
+  grafana:

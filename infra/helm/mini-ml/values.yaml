@@ -1,0 +1,21 @@
+image:
+  registry: ghcr.io/<your>/mini-ml
+  api_tag: latest
+  inference_tag: latest
+
+api:
+  replicas: 1
+  resources:
+    requests: { cpu: "100m", memory: "128Mi" }
+    limits: { cpu: "500m", memory: "512Mi" }
+
+inference:
+  replicas: 1
+  resources:
+    requests: { cpu: "200m", memory: "256Mi" }
+    limits: { cpu: "2",    memory: "1Gi" }
+  hpa:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 60
