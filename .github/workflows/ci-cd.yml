@@ -13,7 +13,7 @@ jobs:
       packages: write
     env:
       REGISTRY: ghcr.io
-      OWNER_LC: ${{ toLower(github.repository_owner) }}
+      OWNER_LC: ${{ github.repository_owner | lower }}
     steps:
       - uses: actions/checkout@v4
 
