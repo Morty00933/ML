@@ -15,12 +15,13 @@ jobs:
     permissions:
       contents: read
       packages: write
+
     steps:
       - uses: actions/checkout@v4
 
       - name: Lowercase owner
         id: prep
-        run: echo "owner_lc=${OWNER,,}" >> "$GITHUB_OUTPUT"
+        run: echo "OWNER_LC=${OWNER,,}" >> "$GITHUB_OUTPUT"
         env:
           OWNER: ${{ github.repository_owner }}
 
@@ -37,7 +38,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ---- Lint Dockerfiles (simple hadolint via container)
+      # Опционально — линт Dockerfile'ов
       - name: Lint Dockerfiles
         uses: hadolint/hadolint-action@v3.1.0
         with:
@@ -47,12 +48,12 @@ jobs:
             services/training/Dockerfile
             services/inference/Dockerfile
 
-      # ---- Build & push: API
+      # ---- API
       - name: Docker meta (api)
         id: meta_api
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/mini-ml-api
+          images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.OWNER_LC }}/mini-ml-api
           tags: |
             type=ref,event=branch
             type=sha
@@ -66,12 +67,12 @@ jobs:
           tags: ${{ steps.meta_api.outputs.tags }}
           labels: ${{ steps.meta_api.outputs.labels }}
 
-      # ---- Build & push: training
+      # ---- TRAINING
       - name: Docker meta (training)
         id: meta_train
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/mini-ml-training
+          images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.OWNER_LC }}/mini-ml-training
           tags: |
             type=ref,event=branch
             type=sha
@@ -85,12 +86,12 @@ jobs:
           tags: ${{ steps.meta_train.outputs.tags }}
           labels: ${{ steps.meta_train.outputs.labels }}
 
-      # ---- Build & push: inference
+      # ---- INFERENCE
       - name: Docker meta (inference)
         id: meta_inf
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/mini-ml-inference
+          images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.OWNER_LC }}/mini-ml-inference
           tags: |
             type=ref,event=branch
             type=sha
@@ -107,25 +108,26 @@ jobs:
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
-    # На уровне job оставляем только ветку (env/secrets тут использовать нельзя)
+    # на уровне job — только проверка ветки
     if: ${{ github.ref == 'refs/heads/main' }}
     permissions:
       contents: read
     env:
       REGISTRY: ghcr.io
-      OWNER_LC: ${{ github.repository_owner }}
       KUBE_CONFIG_BASE64: ${{ secrets.KUBE_CONFIG_BASE64 }}
       K8S_NAMESPACE: ${{ secrets.K8S_NAMESPACE }}
       HELM_RELEASE: ${{ secrets.HELM_RELEASE }}
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Helm lint
+      - name: Set up Helm
         uses: azure/setup-helm@v4
-      - name: Lint chart
+
+      - name: Helm lint
         run: helm lint ./infra/helm/mini-ml
 
-      # ---- Gate: проверяем, что секрет есть (делаем это в шаге, не в job.if)
+      # Gate: секрет kubeconfig должен быть не пустым
       - name: Gate deploy (check KUBE_CONFIG_BASE64)
         id: gate
         run: |
@@ -135,6 +137,13 @@ jobs:
           else
             echo "missing=0" >> "$GITHUB_OUTPUT"
           fi
+
+      # Приводим owner к нижнему регистру в окружении шагов
+      - name: Lowercase owner to env
+        if: ${{ steps.gate.outputs.missing == '0' }}
+        run: echo "OWNER_LC=${OWNER,,}" >> "$GITHUB_ENV"
+        env:
+          OWNER: ${{ github.repository_owner }}
 
       - name: Prepare kubeconfig
         if: ${{ steps.gate.outputs.missing == '0' }}
@@ -157,7 +166,7 @@ jobs:
       - name: Helm upgrade/install
         if: ${{ steps.gate.outputs.missing == '0' }}
         run: |
-          OWNER_LC="${{ env.OWNER_LC,, }}"
+          # здесь используем bash-переменную, БЕЗ {{ }}
           helm upgrade --install "${HELM_RELEASE}" ./infra/helm/mini-ml \
             --namespace "$K8S_NAMESPACE" \
             --set image.registry="${REGISTRY}/${OWNER_LC}" \
