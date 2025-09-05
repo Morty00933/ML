@@ -5,15 +5,9 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-  workflow_dispatch:
-
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   build-and-push:
-    name: Build & push images to GHCR
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -22,21 +16,15 @@ jobs:
     env:
       REGISTRY: ghcr.io
 
-    outputs:
-      # эти outputs понадобятся job'у deploy
-      registry_base: ${{ steps.vars.outputs.registry_base }}
-      sha_tag: ${{ steps.vars.outputs.sha_tag }}
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Compute vars (lowercased owner, tags)
-        id: vars
-        run: |
-          OWNER_LC="${GITHUB_REPOSITORY_OWNER,,}"
-          echo "owner_lc=${OWNER_LC}" >> $GITHUB_OUTPUT
-          echo "sha_tag=sha-${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
-          echo "registry_base=${{ env.REGISTRY }}/${OWNER_LC}/mini-ml" >> $GITHUB_OUTPUT
+      # Приводим owner к нижнему регистру
+      - name: Prepare lowercase owner
+        id: prep
+        run: echo "owner_lc=${OWNER,,}" >> "$GITHUB_OUTPUT"
+        env:
+          OWNER: ${{ github.repository_owner }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -51,15 +39,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ---------- API ----------
+      # ----- API image -----
       - name: Docker meta (API)
         id: meta_api
         uses: docker/metadata-action@v5
         with:
-          images: ${{ steps.vars.outputs.registry_base }}-api
+          images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/mini-ml-api
           tags: |
             type=raw,value=latest
-            type=raw,value=${{ steps.vars.outputs.sha_tag }}
             type=ref,event=branch
             type=sha
 
@@ -68,21 +55,17 @@ jobs:
         with:
           context: ./services/api
           push: true
-          platforms: linux/amd64
           tags: ${{ steps.meta_api.outputs.tags }}
           labels: ${{ steps.meta_api.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
-      # ---------- Inference ----------
+      # ----- Inference image -----
       - name: Docker meta (Inference)
         id: meta_inf
         uses: docker/metadata-action@v5
         with:
-          images: ${{ steps.vars.outputs.registry_base }}-inference
+          images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/mini-ml-inference
           tags: |
             type=raw,value=latest
-            type=raw,value=${{ steps.vars.outputs.sha_tag }}
             type=ref,event=branch
             type=sha
 
@@ -91,110 +74,58 @@ jobs:
         with:
           context: ./services/inference
           push: true
-          platforms: linux/amd64
           tags: ${{ steps.meta_inf.outputs.tags }}
           labels: ${{ steps.meta_inf.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      # ---------- (опционально) Training ----------
-      - name: Docker meta (Training)
-        id: meta_train
-        if: hashFiles('services/training/Dockerfile') != ''
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ steps.vars.outputs.registry_base }}-training
-          tags: |
-            type=raw,value=latest
-            type=raw,value=${{ steps.vars.outputs.sha_tag }}
-            type=ref,event=branch
-            type=sha
-
-      - name: Build & push Training
-        if: hashFiles('services/training/Dockerfile') != ''
-        uses: docker/build-push-action@v6
-        with:
-          context: ./services/training
-          push: true
-          platforms: linux/amd64
-          tags: ${{ steps.meta_train.outputs.tags }}
-          labels: ${{ steps.meta_train.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      # ---------- (опционально) MLflow ----------
-      - name: Docker meta (MLflow)
-        id: meta_mlflow
-        if: hashFiles('services/mlflow/Dockerfile') != ''
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ steps.vars.outputs.registry_base }}-mlflow
-          tags: |
-            type=raw,value=latest
-            type=raw,value=${{ steps.vars.outputs.sha_tag }}
-
-      - name: Build & push MLflow
-        if: hashFiles('services/mlflow/Dockerfile') != ''
-        uses: docker/build-push-action@v6
-        with:
-          context: ./services/mlflow
-          push: true
-          platforms: linux/amd64
-          tags: ${{ steps.meta_mlflow.outputs.tags }}
-          labels: ${{ steps.meta_mlflow.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
   deploy:
-    name: Deploy to Kubernetes (Helm)
+    # деплой возможен только после успешной сборки
     needs: build-and-push
     runs-on: ubuntu-latest
-    if: ${{ github.ref == 'refs/heads/main' && secrets.KUBE_CONFIG_BASE64 != '' }}
-    permissions:
-      contents: read
-      packages: read
-      id-token: write
+
+    # Прокидываем секреты в env и проверяем ИХ, а не secrets.*
+    env:
+      KUBE_CONFIG_BASE64: ${{ secrets.KUBE_CONFIG_BASE64 }}
+      K8S_NAMESPACE: ${{ secrets.K8S_NAMESPACE }}
+      HELM_RELEASE: ${{ secrets.HELM_RELEASE }}
+      OWNER_LC: ${{ github.repository_owner }}
+      REGISTRY: ghcr.io
+
+    # Условие деплоя: ветка main И передан kubeconfig
+    if: ${{ github.ref == 'refs/heads/main' && env.KUBE_CONFIG_BASE64 != '' }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Write kubeconfig
-        run: |
-          echo "${KUBE_CONFIG_BASE64}" | base64 -d > $HOME/.kube/config
+      - name: Lowercase owner
+        id: prep
+        run: echo "owner_lc=${OWNER,,}" >> "$GITHUB_OUTPUT"
         env:
-          KUBE_CONFIG_BASE64: ${{ secrets.KUBE_CONFIG_BASE64 }}
+          OWNER: ${{ env.OWNER_LC }}
 
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v4
-        with:
-          version: 'v1.29.0'
-
-      - name: Set up Helm
-        uses: azure/setup-helm@v4
-        with:
-          version: 'v3.14.4'
-
-      - name: Create/Update imagePullSecret for GHCR
+      - name: Prepare kubeconfig
         run: |
-          kubectl create namespace ml --dry-run=client -o yaml | kubectl apply -f -
-          kubectl delete secret ghcr-cred -n ml --ignore-not-found
-          kubectl create secret docker-registry ghcr-cred \
-            --docker-server=ghcr.io \
-            --docker-username="${GHCR_USERNAME}" \
-            --docker-password="${GHCR_TOKEN}" \
-            -n ml
-        env:
-          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          echo "$KUBE_CONFIG_BASE64" | base64 -d > $HOME/kubeconfig
+          echo "KUBECONFIG=$HOME/kubeconfig" >> $GITHUB_ENV
+
+      - name: Show cluster info (optional)
+        run: |
+          kubectl --kubeconfig "$KUBECONFIG" cluster-info
+          kubectl --kubeconfig "$KUBECONFIG" get ns
+
+      - name: Create namespace if not exists
+        run: |
+          kubectl --kubeconfig "$KUBECONFIG" get ns "$K8S_NAMESPACE" || \
+          kubectl --kubeconfig "$KUBECONFIG" create ns "$K8S_NAMESPACE"
+
+      # Если образы приватные — нужен imagePullSecret (разово в кластере).
+      # Секрет здесь не создаем, считаем что уже есть (например, 'ghcr-secret').
+      # Иначе этот шаг можно добавить.
 
       - name: Helm upgrade/install
         run: |
-          REGISTRY_BASE="${{ needs.build-and-push.outputs.registry_base }}"
-          SHA_TAG="${{ needs.build-and-push.outputs.sha_tag }}"
-          helm upgrade --install mini-ml ./infra/helm/mini-ml \
-            --namespace ml \
-            --set image.registry="${REGISTRY_BASE}" \
-            --set image.api_tag="${SHA_TAG}" \
-            --set image.inference_tag="${SHA_TAG}" \
-            --set-string api.imagePullSecrets[0].name=ghcr-cred \
-            --set-string inference.imagePullSecrets[0].name=ghcr-cred
+          OWNER_LC="${{ steps.prep.outputs.owner_lc }}"
+          helm upgrade --install "${HELM_RELEASE}" ./infra/helm/mini-ml \
+            --namespace "$K8S_NAMESPACE" \
+            --set image.registry="${REGISTRY}/${OWNER_LC}" \
+            --set image.api_tag=latest \
+            --set image.inference_tag=latest
