@@ -1,0 +1,144 @@
+{{- if .Values.networkPolicy.enabled }}
+---
+# Network Policy for API service
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-api-netpol
+  labels:
+    app.kubernetes.io/name: mini-ml
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ .Release.Name }}-api
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow from ingress controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8000
+    # Allow from prometheus for scraping
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    # Allow to MLflow
+    - to:
+        - podSelector:
+            matchLabels:
+              app: mlflow
+      ports:
+        - protocol: TCP
+          port: 5000
+    # Allow to MinIO
+    - to:
+        - podSelector:
+            matchLabels:
+              app: minio
+      ports:
+        - protocol: TCP
+          port: 9000
+    # Allow to training service
+    - to:
+        - podSelector:
+            matchLabels:
+              app: {{ .Release.Name }}-training
+      ports:
+        - protocol: TCP
+          port: 8001
+    # Allow to inference service
+    - to:
+        - podSelector:
+            matchLabels:
+              app: {{ .Release.Name }}-inference
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Allow DNS
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+---
+# Network Policy for Inference service
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-inference-netpol
+  labels:
+    app.kubernetes.io/name: mini-ml
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ .Release.Name }}-inference
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow from API service
+    - from:
+        - podSelector:
+            matchLabels:
+              app: {{ .Release.Name }}-api
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Allow from ingress controller (for direct inference access)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Allow from prometheus for scraping
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # Allow to MLflow
+    - to:
+        - podSelector:
+            matchLabels:
+              app: mlflow
+      ports:
+        - protocol: TCP
+          port: 5000
+    # Allow to MinIO (for model artifacts)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: minio
+      ports:
+        - protocol: TCP
+          port: 9000
+    # Allow DNS
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+{{- end }}

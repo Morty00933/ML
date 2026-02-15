@@ -1,21 +1,134 @@
+# Mini-ML Platform Helm Values
+# =============================================================================
+# IMPORTANT: Do not commit real secrets to this file!
+# Use Kubernetes Secrets or external secret management (Vault, AWS Secrets Manager)
+# =============================================================================
+
 image:
-  registry: ghcr.io/<your>/mini-ml
+  registry: ghcr.io/your-org/mini-ml
   api_tag: latest
   inference_tag: latest
+  pullPolicy: IfNotPresent
 
+# API Service Configuration
 api:
-  replicas: 1
+  replicas: 2
   resources:
-    requests: { cpu: "100m", memory: "128Mi" }
-    limits: { cpu: "500m", memory: "512Mi" }
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
 
+  # Environment variables (non-sensitive)
+  env:
+    MLFLOW_TRACKING_URI: "http://mlflow:5000"
+    MINIO_ENDPOINT: "http://minio:9000"
+    ALLOWED_ORIGINS: "https://your-domain.com"
+    TRAINING_SERVICE_URL: "http://training:8001"
+    INFERENCE_SERVICE_URL: "http://inference:8080"
+
+  # Reference to Kubernetes Secret for sensitive values
+  secretName: mini-ml-api-secrets
+
+  # Health check configuration
+  healthCheck:
+    enabled: true
+    path: /health
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  # Pod disruption budget
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+# Inference Service Configuration
 inference:
-  replicas: 1
+  replicas: 2
   resources:
-    requests: { cpu: "200m", memory: "256Mi" }
-    limits: { cpu: "2",    memory: "1Gi" }
+    requests:
+      cpu: "200m"
+      memory: "512Mi"
+    limits:
+      cpu: "2"
+      memory: "2Gi"
+
+  env:
+    MLFLOW_TRACKING_URI: "http://mlflow:5000"
+    MODEL_STAGE: "Production"
+
+  secretName: mini-ml-inference-secrets
+
+  healthCheck:
+    enabled: true
+    path: /health
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  # Horizontal Pod Autoscaler
   hpa:
     enabled: true
-    minReplicas: 1
-    maxReplicas: 5
-    targetCPUUtilizationPercentage: 60
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+# Ingress Configuration
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: api.your-domain.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: api
+    - host: inference.your-domain.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: inference
+  tls:
+    - secretName: mini-ml-tls
+      hosts:
+        - api.your-domain.com
+        - inference.your-domain.com
+
+# Network Policies
+networkPolicy:
+  enabled: true
+
+# Service Account
+serviceAccount:
+  create: true
+  name: mini-ml-sa
+  annotations: {}
+
+# Pod Security Context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+# Container Security Context
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL

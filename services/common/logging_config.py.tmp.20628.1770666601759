@@ -1,0 +1,173 @@
+"""Structured logging configuration for ML Platform services."""
+import logging
+import sys
+import json
+from datetime import datetime
+from typing import Any
+import os
+
+
+class JSONFormatter(logging.Formatter):
+    """JSON formatter for structured logging."""
+
+    def __init__(self, service_name: str = "unknown"):
+        super().__init__()
+        self.service_name = service_name
+
+    def format(self, record: logging.LogRecord) -> str:
+        log_data = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "level": record.levelname,
+            "service": self.service_name,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "module": record.module,
+            "function": record.funcName,
+            "line": record.lineno,
+        }
+
+        # Add exception info if present
+        if record.exc_info:
+            log_data["exception"] = self.formatException(record.exc_info)
+
+        # Add extra fields
+        if hasattr(record, "extra"):
+            log_data.update(record.extra)
+
+        # Add common extra attributes
+        for key in ["request_id", "user_id", "project", "model_name", "duration_ms"]:
+            if hasattr(record, key):
+                log_data[key] = getattr(record, key)
+
+        return json.dumps(log_data, default=str)
+
+
+class ColoredFormatter(logging.Formatter):
+    """Colored formatter for development."""
+
+    COLORS = {
+        "DEBUG": "\033[36m",     # Cyan
+        "INFO": "\033[32m",      # Green
+        "WARNING": "\033[33m",   # Yellow
+        "ERROR": "\033[31m",     # Red
+        "CRITICAL": "\033[35m",  # Magenta
+    }
+    RESET = "\033[0m"
+
+    def format(self, record: logging.LogRecord) -> str:
+        color = self.COLORS.get(record.levelname, self.RESET)
+        record.levelname = f"{color}{record.levelname}{self.RESET}"
+        return super().format(record)
+
+
+def setup_logging(
+    service_name: str,
+    level: str = None,
+    json_format: bool = None
+) -> logging.Logger:
+    """
+    Configure logging for a service.
+
+    Args:
+        service_name: Name of the service for log identification
+        level: Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        json_format: Use JSON format (True for production)
+
+    Returns:
+        Configured root logger
+    """
+    # Determine settings from environment or defaults
+    if level is None:
+        level = os.getenv("LOG_LEVEL", "INFO")
+
+    if json_format is None:
+        # Use JSON in production (when not in dev mode)
+        json_format = os.getenv("LOG_FORMAT", "").lower() == "json" or \
+                      os.getenv("ENVIRONMENT", "development").lower() == "production"
+
+    # Get numeric level
+    numeric_level = getattr(logging, level.upper(), logging.INFO)
+
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(numeric_level)
+
+    # Remove existing handlers
+    root_logger.handlers.clear()
+
+    # Create handler
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setLevel(numeric_level)
+
+    # Set formatter
+    if json_format:
+        formatter = JSONFormatter(service_name=service_name)
+    else:
+        formatter = ColoredFormatter(
+            fmt="%(asctime)s | %(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d | %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        )
+
+    handler.setFormatter(formatter)
+    root_logger.addHandler(handler)
+
+    # Reduce noise from third-party libraries
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.error").setLevel(logging.INFO)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("botocore").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+
+    return root_logger
+
+
+class LoggerAdapter(logging.LoggerAdapter):
+    """Logger adapter with extra context."""
+
+    def process(self, msg: str, kwargs: dict) -> tuple[str, dict]:
+        # Add extra context to log record
+        extra = kwargs.get("extra", {})
+        extra.update(self.extra)
+        kwargs["extra"] = extra
+        return msg, kwargs
+
+
+def get_logger(name: str, **context) -> LoggerAdapter:
+    """
+    Get a logger with optional context.
+
+    Args:
+        name: Logger name
+        **context: Extra context to include in all logs
+
+    Returns:
+        Logger adapter with context
+    """
+    logger = logging.getLogger(name)
+    return LoggerAdapter(logger, context)
+
+
+# Request ID middleware for FastAPI
+class RequestIDMiddleware:
+    """Middleware to add request ID to logs."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            import uuid
+            request_id = str(uuid.uuid4())[:8]
+
+            # Store in scope for access in handlers
+            scope["request_id"] = request_id
+
+            # Add to log context (thread-local would be better for async)
+            logger = logging.getLogger("request")
+            logger.info(
+                f"Request started",
+                extra={"request_id": request_id, "path": scope["path"], "method": scope["method"]}
+            )
+
+        await self.app(scope, receive, send)

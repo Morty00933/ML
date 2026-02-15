@@ -1,0 +1,30 @@
+{{- if .Values.api.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}-api-pdb
+  labels:
+    app.kubernetes.io/name: mini-ml
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  minAvailable: {{ .Values.api.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-api
+{{- end }}
+---
+{{- if .Values.inference.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}-inference-pdb
+  labels:
+    app.kubernetes.io/name: mini-ml
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  minAvailable: {{ .Values.inference.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-inference
+{{- end }}

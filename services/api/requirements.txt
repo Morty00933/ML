@@ -7,3 +7,4 @@ mlflow==2.14.1
 requests==2.32.3
 prometheus-client==0.20.0
 python-multipart==0.0.9
+slowapi==0.1.9

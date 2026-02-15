@@ -1,15 +1,18 @@
+"""Feature engineering and model pipeline building.
+
+This module provides utilities for building sklearn pipelines
+with proper column handling and model configuration.
+"""
 import pandas as pd
+from sklearn.base import clone
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import f1_score, accuracy_score
-from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-NUMERIC = None  # будет инференситься из df
-
-MODELS = {
+# Model configurations (templates - will be cloned for each use)
+_MODEL_TEMPLATES = {
     "logreg": LogisticRegression(max_iter=1000),
     "rf": RandomForestClassifier(n_estimators=200, random_state=42)
 }
@@ -19,16 +22,42 @@ PARAM_GRID = {
     "rf": {"clf__n_estimators": [100, 200, 400], "clf__max_depth": [None, 5, 10]},
 }
 
+# For backward compatibility
+MODELS = _MODEL_TEMPLATES
 
-def build_pipeline(df: pd.DataFrame, target: str, model_key: str):
-    global NUMERIC
-    NUMERIC = [c for c in df.columns if c != target]
-    pre = ColumnTransformer([
-        ("num", StandardScaler(), NUMERIC)
+
+def build_pipeline(df: pd.DataFrame, target: str, model_key: str) -> Pipeline:
+    """Build a sklearn pipeline for the given data and model type.
+
+    Args:
+        df: DataFrame containing features and target
+        target: Name of the target column
+        model_key: Key for model type ('logreg' or 'rf')
+
+    Returns:
+        sklearn Pipeline ready for fitting
+
+    Raises:
+        KeyError: If model_key is not recognized
+    """
+    if model_key not in _MODEL_TEMPLATES:
+        raise KeyError(f"Unknown model key: {model_key}. Available: {list(_MODEL_TEMPLATES.keys())}")
+
+    # Determine numeric columns (all columns except target)
+    numeric_cols = [c for c in df.columns if c != target]
+
+    # Build preprocessor
+    preprocessor = ColumnTransformer([
+        ("num", StandardScaler(), numeric_cols)
     ])
-    clf = MODELS[model_key]
+
+    # Clone model template to avoid state pollution between runs
+    model = clone(_MODEL_TEMPLATES[model_key])
+
+    # Build pipeline
     pipe = Pipeline([
-        ("prep", pre),
-        ("clf", clf)
+        ("prep", preprocessor),
+        ("clf", model)
     ])
+
     return pipe

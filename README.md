@@ -39,9 +39,9 @@
 
 | Сервис      | Порт         | Описание |
 |-------------|-------------|----------|
-| **API** (FastAPI)      | http://localhost:8000/docs | Управление проектами, датасетами, тренировкой и деплоем |
-| **Training** (FastAPI) | http://localhost:8001/docs | Обучение моделей |
-| **Inference** (FastAPI) | http://localhost:8080/docs | Предсказания |
+| **API** (FastAPI)      | http://localhost:8010/docs | Управление проектами, датасетами, тренировкой и деплоем |
+| **Training** (FastAPI) | http://localhost:8001 (internal) | Обучение моделей |
+| **Inference** (FastAPI) | http://localhost:8085/health | Предсказания |
 | **MLflow**   | http://localhost:5001 | Трекинг экспериментов и Model Registry |
 | **MinIO**    | http://localhost:9001 | S3-хранилище артефактов (логин: `minio`, пароль: `minio12345`) |
 | **Postgres** | localhost:5432 | База для MLflow |
@@ -84,17 +84,25 @@ docker compose ps
 
 ### 1. Создать проект
 ```bash
-curl -X POST http://localhost:8000/projects   -H "X-API-Key: admin-key-123"   -H "Content-Type: application/json"   -d '{"name":"demo"}'
+curl -X POST http://localhost:8010/projects \
+  -H "X-API-Key: YOUR_VIEWER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"demo"}'
 ```
 
 ### 2. Загрузить датасет
 ```bash
-curl -X POST "http://localhost:8000/datasets/upload?project=demo"   -H "X-API-Key: engineer-key-123"   -F "file=@data/samples/iris.csv"
+curl -X POST "http://localhost:8010/datasets/upload?project=demo" \
+  -H "X-API-Key: YOUR_ENGINEER_KEY" \
+  -F "file=@data/samples/iris.csv"
 ```
 
 ### 3. Запустить обучение
 ```bash
-curl -X POST http://localhost:8000/experiments/train   -H "X-API-Key: engineer-key-123"   -H "Content-Type: application/json"   -d '{
+curl -X POST http://localhost:8010/experiments/train \
+  -H "X-API-Key: YOUR_ENGINEER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
     "project":"demo",
     "dataset_s3_uri":"s3://mlflow/projects/demo/datasets/iris.csv",
     "target":"target",
@@ -106,12 +114,17 @@ curl -X POST http://localhost:8000/experiments/train   -H "X-API-Key: engineer-k
 
 ### 4. Деплойнуть модель
 ```bash
-curl -X POST http://localhost:8000/deploy   -H "X-API-Key: admin-key-123"   -H "Content-Type: application/json"   -d '{"model_name":"demo-iris","stage":"Staging"}'
+curl -X POST http://localhost:8010/deploy \
+  -H "X-API-Key: YOUR_ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model_name":"demo-iris","stage":"Staging"}'
 ```
 
 ### 5. Сделать предсказание
 ```bash
-curl -X POST http://localhost:8080/predict   -H "Content-Type: application/json"   -d '{"rows":[{"sepal_length":5.1,"sepal_width":3.5,"petal_length":1.4,"petal_width":0.2}]}'
+curl -X POST http://localhost:8085/predict \
+  -H "Content-Type: application/json" \
+  -d '{"rows":[{"sepal_length":5.1,"sepal_width":3.5,"petal_length":1.4,"petal_width":0.2}]}'
 ```
  Ответ:
 ```json
@@ -123,8 +136,8 @@ curl -X POST http://localhost:8080/predict   -H "Content-Type: application/json"
 ## Мониторинг
 
 ### Метрики
-- API: `http://localhost:8000/metrics`
-- Inference: `http://localhost:8080/metrics`
+- API: `http://localhost:8010/metrics`
+- Inference: `http://localhost:8085/metrics`
 
 ### Grafana дашборды:
 - Requests per second
@@ -140,11 +153,16 @@ curl -X POST http://localhost:8080/predict   -H "Content-Type: application/json"
 
 ## Роли и доступ
 
-| Роль       | API Key         | Возможности |
-|------------|----------------|-------------|
-| **admin**  | `admin-key-123`   | создание проектов, деплой моделей |
-| **engineer** | `engineer-key-123` | загрузка датасетов, тренировка моделей |
-| **viewer** | `viewer-key-123`   | просмотр метрик |
+| Роль       | Env Variable | Возможности |
+|------------|-------------|-------------|
+| **admin**  | `ADMIN_API_KEY` | Полный доступ |
+| **engineer** | `ENGINEER_API_KEY` | Загрузка данных, обучение, деплой |
+| **viewer** | `VIEWER_API_KEY` | Создание проектов, просмотр |
+
+Ключи настраиваются в `.env` файле. Сгенерировать безопасный ключ:
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
 
 ---
 
