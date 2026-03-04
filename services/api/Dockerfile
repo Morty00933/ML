@@ -1,6 +1,9 @@
 # Multi-stage build for smaller, more secure image
 FROM python:3.11-slim AS builder
 
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:0.6 /uv /uvx /usr/local/bin/
+
 WORKDIR /app
 
 # Install build dependencies
@@ -9,13 +12,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Create virtual environment
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+RUN uv venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH" \
+    VIRTUAL_ENV="/opt/venv"
 
 # Install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN uv pip install -r requirements.txt
 
 # Production stage
 FROM python:3.11-slim

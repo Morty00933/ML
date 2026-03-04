@@ -1,0 +1,9 @@
+# Hybrid mode: infra on host Docker, apps in Minikube
+api:
+  env:
+    MLFLOW_TRACKING_URI: "http://host.minikube.internal:5000"
+    MINIO_ENDPOINT: "http://host.minikube.internal:9000"
+
+inference:
+  env:
+    MLFLOW_TRACKING_URI: "http://host.minikube.internal:5000"

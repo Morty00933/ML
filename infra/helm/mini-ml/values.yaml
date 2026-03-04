@@ -5,7 +5,7 @@
 # =============================================================================
 
 image:
-  registry: ghcr.io/your-org/mini-ml
+  registry: ml
   api_tag: latest
   inference_tag: latest
   pullPolicy: IfNotPresent
